@@ -5,7 +5,6 @@ import re
 from collections import Counter
 
 from flask import Flask
-
 import spacy
 
 # ----------------------------
@@ -13,24 +12,16 @@ import spacy
 # ----------------------------
 
 BOARD = "pol"
-REFRESH_SECONDS = 300  # 5 minutes
+REFRESH_SECONDS = 300 
 
 # ----------------------------
-# Flask
+# Flask & NLP Setup
 # ----------------------------
 
 app = Flask(__name__)
 
-# ----------------------------
-# NLP
-# ----------------------------
-
 print("[*] Loading spaCy...")
-nlp = spacy.load("en_core_web_sm")
-
-# ----------------------------
-# Shared State
-# ----------------------------
+nlp = spacy.load("en_core_web_sm", disable=["ner"])
 
 stats = {
     "last_update": "Never",
@@ -50,10 +41,8 @@ URL_RE = re.compile(r"https?://\S+")
 def clean_text(text):
     if not text:
         return ""
-
     text = TAG_RE.sub(" ", text)
     text = URL_RE.sub(" ", text)
-
     text = (
         text.replace("&gt;", " ")
             .replace("&lt;", " ")
@@ -61,9 +50,7 @@ def clean_text(text):
             .replace("&#039;", "'")
             .replace("&quot;", '"')
     )
-
     text = re.sub(r"\s+", " ", text)
-
     return text.strip()
 
 # ----------------------------
@@ -76,34 +63,76 @@ def fetch_catalog():
 
 def fetch_thread(thread_id):
     url = f"https://a.4cdn.org/{BOARD}/thread/{thread_id}.json"
-
     try:
+        time.sleep(0.2) 
         return requests.get(url, timeout=30).json()
     except Exception:
         return None
 
 # ----------------------------
-# Topic Extraction
+# Topic Ranker & Metric Engine
 # ----------------------------
 
 def extract_topics(posts):
-    counter = Counter()
+    phrase_counter = Counter()
+    
+    docs = nlp.pipe(posts, batch_size=256)
+    
+    GENERIC_SINGLE_WORDS = {
+        "people", "shit", "thing", "year", "time", "way", "guy", "day", 
+        "life", "lot", "point", "job", "reason", "problem", "thread", 
+        "post", "anon", "kek", "lol", "something", "anything", "nothing",
+        "man", "woman", "kid", "child", "someone", "everyone", "fuck", "retard"
+    }
 
-    # nlp.pipe processes a collection of texts efficiently without creating one massive string
-    # disable=["parser", "ner"] speeds up processing dramatically since you only need POS tags
-    docs = nlp.pipe(posts, disable=["parser", "ner"], batch_size=256)
-
+    # Step 1: Discover structural noun phrase clusters
     for doc in docs:
-        for token in doc:
-            if (
-                token.pos_ in ("NOUN", "PROPN")
-                and not token.is_stop
-                and token.is_alpha
-                and len(token.text) > 2
-            ):
-                counter[token.lemma_.lower()] += 1
+        for chunk in doc.noun_chunks:
+            words = []
+            for t in chunk:
+                if t.is_stop:
+                    continue
+                lemma = t.lemma_.lower().strip()
+                if lemma:
+                    words.append(lemma)
+            
+            clean_phrase = " ".join(words).strip()
+            
+            if not clean_phrase or not all(w.isalpha() for w in words):
+                continue
+                
+            if clean_phrase in GENERIC_SINGLE_WORDS:
+                continue
+                
+            if len(words) > 3:
+                continue
 
-    return counter.most_common(50)
+            phrase_counter[clean_phrase] += 1
+
+    # Extract the top 50 topics based on context structure rank
+    top_phrases = phrase_counter.most_common(50)
+    
+    # Step 2: Extract raw corpus string and calculate the total literal mention volume
+    full_corpus = " " + " ".join(posts).lower() + " "
+    final_topics_data = []
+    
+    for phrase, context_count in top_phrases:
+        if " " in phrase:
+            literal_count = full_corpus.count(f" {phrase} ")
+        else:
+            # Drop trailing 's' if the token string already arrived pluralized from spaCy.
+            # This keeps the regex clean as '\bjews?\b' instead of creating double-s bugs like '\bjewss?\b'
+            base_word = phrase[:-1] if phrase.endswith('s') and len(phrase) > 3 else phrase
+            pattern = re.compile(rf"\b{base_word}s?\b") 
+            literal_count = len(pattern.findall(full_corpus))
+            
+        # Hard boundary fallbacks
+        if literal_count < context_count:
+            literal_count = context_count
+            
+        final_topics_data.append((phrase, literal_count))
+
+    return final_topics_data
 
 # ----------------------------
 # Analyzer Loop
@@ -115,66 +144,46 @@ def analyze():
     while True:
         try:
             print("[*] Loading catalog...")
-
             catalog = fetch_catalog()
-
-            thread_ids = []
-
-            for page in catalog:
-                for thread in page["threads"]:
-                    thread_ids.append(thread["no"])
+            thread_ids = [thread["no"] for page in catalog for thread in page["threads"]]
 
             all_posts = []
             sample_posts = []
-
             total_posts = 0
 
             print(f"[*] Found {len(thread_ids)} threads")
 
             for i, thread_id in enumerate(thread_ids):
-
                 if i % 25 == 0:
-                    print(
-                        f"[*] Thread {i}/{len(thread_ids)}"
-                    )
+                    print(f"[*] Thread {i}/{len(thread_ids)}")
 
                 data = fetch_thread(thread_id)
-
                 if not data:
                     continue
 
                 for post in data.get("posts", []):
-                    text = clean_text(
-                        post.get("com", "")
-                    )
-
+                    text = clean_text(post.get("com", ""))
                     if not text:
                         continue
 
                     all_posts.append(text)
-
                     if len(sample_posts) < 25:
                         sample_posts.append(text[:300])
-
                     total_posts += 1
 
-            print(
-                f"[*] Processing {total_posts} posts..."
-            )
-
+            print(f"[*] Extracting structural lists and literal counts across {total_posts} posts...")
             topics = extract_topics(all_posts)
 
-            stats = {
-                "last_update": time.strftime(
-                    "%Y-%m-%d %H:%M:%S"
-                ),
+            local_stats = {
+                "last_update": time.strftime("%Y-%m-%d %H:%M:%S"),
                 "threads": len(thread_ids),
                 "posts": total_posts,
                 "topics": topics,
                 "top_posts": sample_posts,
             }
 
-            print("[+] Update complete")
+            stats = local_stats
+            print("[+] Update complete. Clean dataset pushed to dashboard interface!")
 
         except Exception as e:
             print("[!] Error:", e)
@@ -182,126 +191,80 @@ def analyze():
         time.sleep(REFRESH_SECONDS)
 
 # ----------------------------
-# Dashboard
+# Dashboard Route
 # ----------------------------
 
 @app.route("/")
 def home():
+    if stats["last_update"] == "Never":
+        return """
+<!DOCTYPE html>
+<html>
+<head>
+    <title>/pol/ Analyzer - Updating Metrics</title>
+    <meta http-equiv="refresh" content="5">
+    <style>body { background:#111; color:#ffcc00; font-family:Arial; margin:50px; text-align:center; }</style>
+</head>
+<body>
+    <h1>/pol/ Analyzer</h1>
+    <p>Ranking topics contextually and aggregating absolute text mention analytics... (takes ~60s)</p>
+</body>
+</html>
+"""
 
     rows = ""
-
-    for topic, count in stats["topics"]:
+    for topic, literal_count in stats["topics"]:
         rows += f"""
         <tr>
-            <td>{topic}</td>
-            <td>{count}</td>
+            <td><b>{topic}</b></td>
+            <td style="color: #ffcc00; font-weight: bold;">{literal_count}</td>
         </tr>
         """
-
-    post_html = ""
-
-    for post in stats["top_posts"]:
-        post_html += f"""
-        <div class="post">
-            {post}
-        </div>
-        """
+        
+    post_html = "".join(f'<div class="post">{post}</div>' for post in stats["top_posts"])
 
     return f"""
 <!DOCTYPE html>
 <html>
 <head>
 <title>/pol/ Analyzer</title>
-
 <meta http-equiv="refresh" content="60">
-
 <style>
-body {{
-    background:#111;
-    color:#ddd;
-    font-family:Arial;
-    margin:30px;
-}}
-
-h1 {{
-    color:#ffcc00;
-}}
-
-.card {{
-    background:#1c1c1c;
-    padding:15px;
-    margin-bottom:20px;
-    border-radius:8px;
-}}
-
-table {{
-    width:100%;
-    border-collapse:collapse;
-}}
-
-td,th {{
-    border-bottom:1px solid #333;
-    padding:8px;
-}}
-
-.post {{
-    padding:8px;
-    margin-bottom:8px;
-    background:#222;
-    border-left:4px solid #ffcc00;
-}}
+body {{ background:#111; color:#ddd; font-family:Arial; margin:30px; }}
+h1 {{ color:#ffcc00; }}
+.card {{ background:#1c1c1c; padding:15px; margin-bottom:20px; border-radius:8px; }}
+table {{ width:100%; border-collapse:collapse; }}
+td,th {{ border-bottom:1px solid #333; padding:10px; text-align:left; }}
+th {{ color:#ffcc00; }}
+.post {{ padding:8px; margin-bottom:8px; background:#222; border-left:4px solid #ffcc00; }}
 </style>
-
 </head>
-
 <body>
-
 <h1>/pol/ Trending Topics</h1>
-
 <div class="card">
 <b>Last Update:</b> {stats["last_update"]}<br>
-<b>Threads:</b> {stats["threads"]}<br>
-<b>Posts:</b> {stats["posts"]}
+<b>Active Threads Checked:</b> {stats["threads"]}<br>
+<b>Total Posts Analyzed:</b> {stats["posts"]}
 </div>
-
 <div class="card">
-<h2>Top Topics</h2>
-
+<h2>Top Trending Subject Parameters</h2>
 <table>
 <tr>
-<th>Topic</th>
-<th>Count</th>
+    <th>Topic / Phrase</th>
+    <th style="color: #ffcc00;">Total Word Mentions</th>
 </tr>
-
 {rows}
-
 </table>
 </div>
-
 <div class="card">
-<h2>Sample Posts</h2>
+<h2>Sample Feed</h2>
 {post_html}
 </div>
-
 </body>
 </html>
 """
 
-# ----------------------------
-# Main
-# ----------------------------
-
 if __name__ == "__main__":
-
-    thread = threading.Thread(
-        target=analyze,
-        daemon=True
-    )
-
+    thread = threading.Thread(target=analyze, daemon=True)
     thread.start()
-
-    app.run(
-        host="0.0.0.0",
-        port=5000,
-        debug=False
-    )
+    app.run(host="0.0.0.0", port=5000, debug=False)
