@@ -260,22 +260,18 @@ def home():
     if query:
         matching_posts = []
         
-        # Check if query is a single word to run singular/plural regex logic
         if " " not in query:
             root_term = get_singular_root(query.lower())
             search_pattern = re.compile(rf"\b{root_term}s?\b", flags=re.IGNORECASE)
         else:
-            # Multi-word phrase matches directly matching boundaries
             search_pattern = re.compile(rf"\b{re.escape(query.lower())}\b", flags=re.IGNORECASE)
         
         for post in stats["raw_posts_pool"]:
             matches = search_pattern.findall(post)
             if matches:
-                # Increment match count by the total frequency inside this post
                 match_count += len(matches)
                 
                 if len(matching_posts) < 100:
-                    # Highlight words matched cleanly by the regex pattern boundaries
                     highlighted_text = search_pattern.sub(
                         r"<mark style='background: #ffeb3b; color: #000; padding: 1px 3px; font-weight: bold;'>\g<0></mark>", 
                         post
@@ -300,7 +296,7 @@ def home():
                 </div>
                 """
         else:
-            search_results_html = f"<p style='color: #af0a0f; font-weight: bold; margin-top: 20px;'>No direct historical matches found for '{query}' inside the active scraper cache.</p>"
+            search_results_html = f"<p style='color: #af0a0f; font-weight: bold; margin: 20px auto; max-width: 700px;'>No direct historical matches found for '{query}' inside the active scraper cache.</p>"
 
     trends_display = "block" if active_tab == "trends" else "none"
     search_display = "block" if active_tab == "search" else "none"
@@ -320,6 +316,7 @@ body {{
     font-size: 13px;
     margin: 20px; 
     padding-bottom: 50px;
+    text-align: center;
 }}
 h1 {{ 
     color: #af0a0f; 
@@ -343,15 +340,20 @@ h1 {{
     padding-bottom: 4px;
     margin-top: 20px;
     margin-bottom: 12px;
+    max-width: 700px;
+    margin-left: auto;
+    margin-right: auto;
+    text-align: left;
 }}
 .stats-box {{ 
     background: #d6daf0; 
     border: 1px solid #b7c5d9;
     padding: 10px; 
-    margin-bottom: 25px; 
+    margin: 0 auto 25px auto; 
     font-size: 12px;
     display: inline-block;
     min-width: 280px;
+    text-align: left;
 }}
 .stats-box b {{
     color: #0f0c5d;
@@ -359,7 +361,9 @@ h1 {{
 
 .tabs-nav {{
     border-bottom: 2px solid #b7c5d9;
-    margin-bottom: 20px;
+    margin: 0 auto 20px auto;
+    max-width: 700px;
+    text-align: center;
 }}
 .tab-btn {{
     background: #e0e4f6;
@@ -387,10 +391,10 @@ h1 {{
     border: 1px solid #b7c5d9;
     padding: 15px;
     max-width: 670px;
-    margin-bottom: 20px;
+    margin: 0 auto 20px auto;
 }}
 .search-input {{
-    width: 75%;
+    width: 70%;
     padding: 6px;
     font-size: 14px;
     border: 1px solid #b7c5d9;
@@ -406,10 +410,11 @@ h1 {{
 .search-meta-summary {{
     background: #e0e4f6;
     padding: 8px 12px;
-    margin-bottom: 15px;
-    max-width: 775px;
+    margin: 0 auto 15px auto;
+    max-width: 676px;
     border: 1px solid #b7c5d9;
     font-size: 13px;
+    text-align: left;
 }}
 
 table {{ 
@@ -418,12 +423,12 @@ table {{
     border-collapse: collapse; 
     background: #d6daf0;
     border: 1px solid #b7c5d9;
-    margin-bottom: 20px;
+    margin: 0 auto 20px auto;
+    text-align: left;
 }}
 td, th {{ 
     border: 1px solid #b7c5d9; 
     padding: 6px 10px; 
-    text-align: left; 
 }}
 th {{ 
     background: #e0e4f6; 
@@ -438,9 +443,10 @@ th {{
     background: #d6daf0; 
     border: 1px solid #b7c5d9;
     padding: 8px 12px; 
-    margin-bottom: 8px; 
-    max-width: 800px;
-    display: table;
+    margin: 0 auto 8px auto; 
+    width: 100%;
+    max-width: 676px;
+    text-align: left;
 }}
 .post-meta {{ 
     font-size: 11px; 
